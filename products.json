@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html { scroll-behavior: smooth; }
+body { @apply bg-base text-gray-200 antialiased; }
+.prose-x h2 { @apply text-2xl font-bold mt-10 mb-4 text-white; }
+.prose-x h3 { @apply text-xl font-semibold mt-8 mb-3 text-white; }
+.prose-x p { @apply text-muted leading-relaxed mb-4; }
+.prose-x ul, .prose-x ol { @apply text-muted leading-relaxed mb-4 pl-6 space-y-2; }
+.prose-x ul { @apply list-disc; }
+.prose-x ol { @apply list-decimal; }
+.prose-x strong { @apply text-gray-100; }
+.prose-x code { @apply bg-panel px-1.5 py-0.5 rounded text-accent text-sm; }
+.prose-x a { @apply text-accent underline underline-offset-4; }
+.container-x { @apply max-w-6xl mx-auto px-4 sm:px-6; }

@@ -1,0 +1,65 @@
+// Vercel serverless: безопасная проверка HTTP-заголовков чужого сайта (с защитой от SSRF).
+import dns from 'node:dns/promises'
+import net from 'node:net'
+
+const KEYS = ['content-security-policy', 'strict-transport-security', 'x-frame-options',
+  'x-content-type-options', 'referrer-policy', 'permissions-policy']
+const MAX_REDIRECTS = 3, TIMEOUT_MS = 8000
+
+export function isPrivateIp(ip) {
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split('.').map(Number)
+    return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) || (a === 192 && b === 0) || a >= 224
+  }
+  const v = ip.toLowerCase()
+  if (v.startsWith('::ffff:')) return isPrivateIp(v.slice(7))
+  return v === '::' || v === '::1' || v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe8') ||
+    v.startsWith('fe9') || v.startsWith('fea') || v.startsWith('feb') || v.startsWith('ff')
+}
+
+export async function assertPublicUrl(raw) {
+  let u
+  try { u = new URL(/^https?:\/\//i.test(raw) ? raw : 'https://' + raw) } catch { throw new Error('invalid_url') }
+  if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password) throw new Error('invalid_url')
+  if (u.port && !['80', '443'].includes(u.port)) throw new Error('blocked_target')
+  const host = u.hostname.replace(/^\[|\]$/g, '')
+  if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal')) throw new Error('blocked_target')
+  const addrs = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true }).catch(() => { throw new Error('dns_failed') })
+  if (!addrs.length || addrs.some(a => isPrivateIp(a.address))) throw new Error('blocked_target')
+  return u
+}
+
+async function request(url, method, signal) {
+  return fetch(url, { method, redirect: 'manual', signal, headers: { 'user-agent': 'SecureHubHeaderCheck/1.0' } })
+}
+
+export default async function handler(req, res) {
+  res.setHeader('Cache-Control', 'no-store')
+  if (req.method !== 'GET') return res.status(405).json({ error: 'method_not_allowed' })
+  const raw = String(req.query?.url || '').trim().slice(0, 2048)
+  if (!raw) return res.status(400).json({ error: 'invalid_url' })
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), TIMEOUT_MS)
+  try {
+    let u = await assertPublicUrl(raw), r
+    for (let i = 0; i <= MAX_REDIRECTS; i++) {
+      r = await request(u.href, 'HEAD', ctl.signal)
+      if (r.status === 405 || r.status === 501) r = await request(u.href, 'GET', ctl.signal)
+      const loc = r.headers.get('location')
+      if (r.status >= 300 && r.status < 400 && loc) {
+        if (i === MAX_REDIRECTS) throw new Error('too_many_redirects')
+        u = await assertPublicUrl(new URL(loc, u).href)
+        continue
+      }
+      break
+    }
+    const headers = {}
+    KEYS.forEach(k => { const v = r.headers.get(k); if (v) headers[k] = v.slice(0, 1000) })
+    return res.status(200).json({ url: u.href, hostname: u.hostname, status: r.status, headers })
+  } catch (e) {
+    const known = ['invalid_url', 'blocked_target', 'dns_failed', 'too_many_redirects']
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'timeout' })
+    return res.status(known.includes(e.message) ? 400 : 502).json({ error: known.includes(e.message) ? e.message : 'fetch_failed' })
+  } finally { clearTimeout(timer) }
+}

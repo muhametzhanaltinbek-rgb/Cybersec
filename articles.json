@@ -1,0 +1,3 @@
+// Домен и контакты берутся из переменных окружения (см. .env.example).
+export const SITE_URL = (import.meta.env.VITE_SITE_URL || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/$/, '')
+export const CONTACT_EMAIL = import.meta.env.VITE_CONTACT_EMAIL || ''
